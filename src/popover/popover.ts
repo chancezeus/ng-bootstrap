@@ -1,26 +1,27 @@
 import {
-  Component,
-  Directive,
-  Input,
-  Output,
-  EventEmitter,
   ChangeDetectionStrategy,
-  OnInit,
-  OnDestroy,
-  Injector,
-  Renderer2,
-  ComponentRef,
-  ElementRef,
-  TemplateRef,
-  ViewContainerRef,
+  Component,
   ComponentFactoryResolver,
-  NgZone
+  ComponentRef,
+  Directive,
+  ElementRef,
+  EventEmitter,
+  HostListener,
+  Injector,
+  Input,
+  NgZone,
+  OnDestroy,
+  OnInit,
+  Output,
+  Renderer2,
+  TemplateRef,
+  ViewContainerRef
 } from '@angular/core';
 
 import {listenToTriggers} from '../util/triggers';
-import {positionElements, Placement, PlacementArray} from '../util/positioning';
-import {PopupService} from '../util/popup';
+import {Placement, PlacementArray, positionElements} from '../util/positioning';
 import {NgbPopoverConfig} from './popover-config';
+import {PopoverService} from './popover-service';
 
 let nextId = 0;
 
@@ -34,7 +35,8 @@ let nextId = 0;
   },
   template: `
     <div class="arrow"></div>
-    <h3 class="popover-header">{{title}}</h3><div class="popover-body"><ng-content></ng-content></div>`,
+    <h3 class="popover-header"><ng-content selector="popover-title"></ng-content></h3>
+    <div class="popover-body"><ng-content selector="popover-body"></ng-content></div>`,
   styles: [`
     :host.bs-popover-top .arrow, :host.bs-popover-bottom .arrow {
       left: 50%;
@@ -54,7 +56,7 @@ let nextId = 0;
       top: 50%;
       margin-top: -5px;
     }
-    
+
     :host.bs-popover-left-top .arrow, :host.bs-popover-right-top .arrow {
       top: 0.7em;
     }
@@ -67,7 +69,6 @@ let nextId = 0;
 })
 export class NgbPopoverWindow {
   @Input() placement: Placement = 'top';
-  @Input() title: string;
   @Input() id: string;
 
   constructor(private _element: ElementRef, private _renderer: Renderer2) {}
@@ -98,7 +99,7 @@ export class NgbPopover implements OnInit, OnDestroy {
   /**
    * Title of a popover.
    */
-  @Input() popoverTitle: string;
+  @Input() popoverTitle: string | TemplateRef<any>;
   /**
    * Placement of a popover accepts:
    *    "top", "top-left", "top-right", "bottom", "bottom-left", "bottom-right",
@@ -122,6 +123,10 @@ export class NgbPopover implements OnInit, OnDestroy {
    */
   @Input() disablePopover: boolean;
   /**
+   * A flag indicating if the given popover can be dismissed when clicking anywhere else.
+   */
+  @Input() dismissible: boolean;
+  /**
    * Emits an event when the popover is shown
    */
   @Output() shown = new EventEmitter();
@@ -131,28 +136,39 @@ export class NgbPopover implements OnInit, OnDestroy {
   @Output() hidden = new EventEmitter();
 
   private _ngbPopoverWindowId = `ngb-popover-${nextId++}`;
-  private _popupService: PopupService<NgbPopoverWindow>;
+  private _popupService: PopoverService;
   private _windowRef: ComponentRef<NgbPopoverWindow>;
   private _unregisterListenersFn;
   private _zoneSubscription: any;
 
+  @HostListener('document:click', ['$event']) onClick(event) {
+    if (this.dismissible && this._windowRef != null) {
+      if (
+        !this._windowRef.location.nativeElement.contains(event.target) &&
+        !this._elementRef.nativeElement.contains(event.target)
+      ) {
+        this.close();
+      }
+    }
+  }
+
   constructor(
-      private _elementRef: ElementRef, private _renderer: Renderer2, injector: Injector,
-      componentFactoryResolver: ComponentFactoryResolver, viewContainerRef: ViewContainerRef, config: NgbPopoverConfig,
-      ngZone: NgZone) {
+    private _elementRef: ElementRef, private _renderer: Renderer2, injector: Injector,
+    componentFactoryResolver: ComponentFactoryResolver, viewContainerRef: ViewContainerRef, config: NgbPopoverConfig,
+    ngZone: NgZone) {
     this.placement = config.placement;
     this.triggers = config.triggers;
     this.container = config.container;
     this.disablePopover = config.disablePopover;
-    this._popupService = new PopupService<NgbPopoverWindow>(
-        NgbPopoverWindow, injector, viewContainerRef, _renderer, componentFactoryResolver);
+    this._popupService = new PopoverService(
+      NgbPopoverWindow, injector, viewContainerRef, _renderer, componentFactoryResolver);
 
     this._zoneSubscription = ngZone.onStable.subscribe(() => {
       if (this._windowRef) {
         this._windowRef.instance.applyPlacement(
-            positionElements(
-                this._elementRef.nativeElement, this._windowRef.location.nativeElement, this.placement,
-                this.container === 'body'));
+          positionElements(
+            this._elementRef.nativeElement, this._windowRef.location.nativeElement, this.placement,
+            this.container === 'body'));
       }
     });
   }
@@ -163,8 +179,7 @@ export class NgbPopover implements OnInit, OnDestroy {
    */
   open(context?: any) {
     if (!this._windowRef && !this.disablePopover) {
-      this._windowRef = this._popupService.open(this.ngbPopover, context);
-      this._windowRef.instance.title = this.popoverTitle;
+      this._windowRef = this._popupService.open(this.ngbPopover, this.popoverTitle, context);
       this._windowRef.instance.id = this._ngbPopoverWindowId;
 
       this._renderer.setAttribute(this._elementRef.nativeElement, 'aria-describedby', this._ngbPopoverWindowId);
@@ -179,9 +194,9 @@ export class NgbPopover implements OnInit, OnDestroy {
 
       // position popover along the element
       this._windowRef.instance.applyPlacement(
-          positionElements(
-              this._elementRef.nativeElement, this._windowRef.location.nativeElement, this.placement,
-              this.container === 'body'));
+        positionElements(
+          this._elementRef.nativeElement, this._windowRef.location.nativeElement, this.placement,
+          this.container === 'body'));
 
       this.shown.emit();
     }
@@ -217,8 +232,8 @@ export class NgbPopover implements OnInit, OnDestroy {
 
   ngOnInit() {
     this._unregisterListenersFn = listenToTriggers(
-        this._renderer, this._elementRef.nativeElement, this.triggers, this.open.bind(this), this.close.bind(this),
-        this.toggle.bind(this));
+      this._renderer, this._elementRef.nativeElement, this.triggers, this.open.bind(this), this.close.bind(this),
+      this.toggle.bind(this));
   }
 
   ngOnDestroy() {
